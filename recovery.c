@@ -41,9 +41,6 @@
 #include "roots.h"
 #include "recovery_ui.h"
 
-#include "adb_install.h"
-#include "minadbd/adb.h"
-
 #include "extendedcommands.h"
 #include "flashutils/flashutils.h"
 #include "dedupe/dedupe.h"
@@ -644,8 +641,8 @@ wipe_data(int confirm) {
         }
 
         char* items[] = { " Yes -- delete all user data",   // [0]
-						  " No",
-                          NULL };
+                          " No",
+						  NULL };
 
         int chosen_item = get_menu_selection(title_headers, items, 1, 0);
         if (chosen_item != 0) {
@@ -714,10 +711,6 @@ prompt_and_wait() {
                 show_install_update_menu();
                 break;
 
-            case ITEM_APPLY_SIDELOAD:
-                apply_from_adb();
-                break;
-
             case ITEM_NANDROID:
                 show_nandroid_menu();
                 break;
@@ -744,11 +737,6 @@ print_property(const char *key, const char *name, void *cookie) {
 
 int
 main(int argc, char **argv) {
-
-    if (argc == 2 && strcmp(argv[1], "adbd") == 0) {
-        adb_main();
-        return 0;
-    }
 
     // Recovery needs to install world-readable files, so clear umask
     // set by init
