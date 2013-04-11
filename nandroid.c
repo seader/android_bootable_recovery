@@ -128,7 +128,7 @@ static int mkyaffs2image_wrapper(const char* backup_path, const char* backup_fil
 
 static int tar_compress_wrapper(const char* backup_path, const char* backup_file_image, int callback) {
     char tmp[PATH_MAX];
-    sprintf(tmp, "cd $(dirname %s) ; touch %s.tar ; (tar cv %s $(basename %s) | split -a 1 -b 1000000000 /proc/self/fd/0 %s.tar.) 2> /proc/self/fd/1 ; exit $?", backup_path, backup_file_image, strcmp(backup_path, "/data") == 0 && is_data_media() ? "--exclude 'media'" : "", backup_path, backup_file_image);
+    sprintf(tmp, "cd $(dirname %s) ; touch %s.tar ; (tar cv --exclude=data/data/com.google.android.music/files/* %s $(basename %s) | split -a 1 -b 1000000000 /proc/self/fd/0 %s.tar.) 2> /proc/self/fd/1 ; exit $?", backup_path, backup_file_image, strcmp(backup_path, "/data") == 0 && is_data_media() ? "--exclude 'media'" : "", backup_path, backup_file_image);
 
     FILE *fp = __popen(tmp, "r");
     if (fp == NULL) {
@@ -193,7 +193,7 @@ static int dedupe_compress_wrapper(const char* backup_path, const char* backup_f
     return __pclose(fp);
 }
 
-static nandroid_backup_handler default_backup_handler = dedupe_compress_wrapper;
+static nandroid_backup_handler default_backup_handler = tar_compress_wrapper;
 static char forced_backup_format[5] = "";
 void nandroid_force_backup_format(const char* fmt) {
     strcpy(forced_backup_format, fmt);
@@ -206,16 +206,27 @@ static void refresh_default_backup_handler() {
     else {
         ensure_path_mounted("/sdcard");
         FILE* f = fopen(NANDROID_BACKUP_FORMAT_FILE, "r");
-        if (NULL == f)
+        if (NULL == f) {
+            default_backup_handler = tar_compress_wrapper;
             return;
+        }
         fread(fmt, 1, sizeof(fmt), f);
         fclose(f);
     }
     fmt[3] = NULL;
-    if (0 == strcmp(fmt, "tar"))
-        default_backup_handler = tar_compress_wrapper;
-    else
+    if (0 == strcmp(fmt, "dup"))
         default_backup_handler = dedupe_compress_wrapper;
+    else
+        default_backup_handler = tar_compress_wrapper;
+}
+
+unsigned nandroid_get_default_backup_format() {
+    refresh_default_backup_handler();
+    if (default_backup_handler == dedupe_compress_wrapper) {
+        return NANDROID_BACKUP_FORMAT_DUP;
+    } else {
+        return NANDROID_BACKUP_FORMAT_TAR;
+    }
 }
 
 static nandroid_backup_handler get_backup_handler(const char *backup_path) {
@@ -374,12 +385,10 @@ int nandroid_backup(const char* backup_path)
             return ret;
     }
 
-    if (0 != stat("/sdcard/.android_secure", &s))
-    {
+    if (is_data_media() || 0 != stat("/sdcard/.android_secure", &s)) {
         ui_print("No /sdcard/.android_secure found. Skipping backup of applications on external storage.\n");
     }
-    else
-    {
+    else {
         if (0 != (ret = nandroid_backup_partition_extended(backup_path, "/sdcard/.android_secure", 0)))
             return ret;
     }
@@ -406,7 +415,10 @@ int nandroid_backup(const char* backup_path)
         ui_print("Error while generating md5 sum!\n");
         return ret;
     }
-    
+
+    sprintf(tmp, "cp /tmp/recovery.log %s/recovery.log", backup_path);
+    __system(tmp);
+
     sprintf(tmp, "chmod -R 777 %s ; chmod -R u+r,u+w,g+r,g+w,o+r,o+w /sdcard/clockworkmod ; chmod u+x,g+x,o+x /sdcard/clockworkmod/backup ; chmod u+x,g+x,o+x /sdcard/clockworkmod/blobs", backup_path);
     __system(tmp);
     sync();

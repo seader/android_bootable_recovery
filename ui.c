@@ -579,7 +579,7 @@ void ui_init(void)
 
 char *ui_copy_image(int icon, int *width, int *height, int *bpp) {
     pthread_mutex_lock(&gUpdateMutex);
-    draw_background_locked(gBackgroundIcon[icon]);
+    draw_background_locked(icon);
     *width = gr_fb_width();
     *height = gr_fb_height();
     *bpp = sizeof(gr_pixel) * 8;
@@ -855,6 +855,14 @@ static int usb_connected() {
                strerror(errno));
     }
     return connected;
+}
+
+void ui_cancel_wait_key() {
+    pthread_mutex_lock(&key_queue_mutex);
+    key_queue[key_queue_len] = -2;
+    key_queue_len++;
+    pthread_cond_signal(&key_queue_cond);
+    pthread_mutex_unlock(&key_queue_mutex);
 }
 
 int ui_wait_key()

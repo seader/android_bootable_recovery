@@ -41,6 +41,9 @@
 #include "roots.h"
 #include "recovery_ui.h"
 
+#include "adb_install.h"
+#include "minadbd/adb.h"
+
 #include "extendedcommands.h"
 #include "flashutils/flashutils.h"
 #include "dedupe/dedupe.h"
@@ -438,11 +441,6 @@ get_menu_selection(char** headers, char** items, int menu_only,
     int selected = initial_selection;
     int chosen_item = -1;
 
-    // Some users with dead enter keys need a way to turn on power to select.
-    // Jiggering across the wrapping menu is one "secret" way to enable it.
-    // We can't rely on /cache or /sdcard since they may not be available.
-    int wrap_count = 0;
-
     while (chosen_item < 0 && chosen_item != GO_BACK) {
         int key = ui_wait_key();
         int visible = ui_text_visible();
@@ -455,6 +453,9 @@ get_menu_selection(char** headers, char** items, int menu_only,
                 ui_end_menu();
                 return ITEM_REBOOT;
             }
+        }
+        else if (key == -2) {
+            return GO_BACK;
         }
 
         int action = ui_handle_key(key, visible);
@@ -640,9 +641,9 @@ wipe_data(int confirm) {
             title_headers = prepend_title((const char**)headers);
         }
 
-        char* items[] = { " Yes -- delete all user data",   // [0]
+        char* items[] = { " Yes -- delete all user data",   // [7]
                           " No",
-						  NULL };
+                          NULL };
 
         int chosen_item = get_menu_selection(title_headers, items, 1, 0);
         if (chosen_item != 0) {
@@ -711,6 +712,10 @@ prompt_and_wait() {
                 show_install_update_menu();
                 break;
 
+            case ITEM_APPLY_SIDELOAD:
+                apply_from_adb();
+                break;
+
             case ITEM_NANDROID:
                 show_nandroid_menu();
                 break;
@@ -735,8 +740,46 @@ print_property(const char *key, const char *name, void *cookie) {
     printf("%s=%s\n", key, name);
 }
 
+static void
+setup_adbd() {
+    struct stat f;
+    static char *key_src = "/data/misc/adb/adb_keys";
+    static char *key_dest = "/adb_keys";
+
+    // Mount /data and copy adb_keys to root if it exists
+    ensure_path_mounted("/data");
+    if (stat(key_src, &f) == 0) {
+        FILE *file_src = fopen(key_src, "r");
+        if (file_src == NULL) {
+            LOGE("Can't open %s\n", key_src);
+        } else {
+            FILE *file_dest = fopen(key_dest, "w");
+            if (file_dest == NULL) {
+                LOGE("Can't open %s\n", key_dest);
+            } else {
+                char buf[4096];
+                while (fgets(buf, sizeof(buf), file_src)) fputs(buf, file_dest);
+                check_and_fclose(file_dest, key_dest);
+
+                // Enable secure adbd
+                property_set("ro.adb.secure", "1");
+            }
+            check_and_fclose(file_src, key_src);
+        }
+    }
+    ensure_path_unmounted("/data");
+
+    // Trigger (re)start of adb daemon
+    property_set("service.adb.root", "1");
+}
+
 int
 main(int argc, char **argv) {
+
+    if (argc == 2 && strcmp(argv[1], "adbd") == 0) {
+        adb_main();
+        return 0;
+    }
 
     // Recovery needs to install world-readable files, so clear umask
     // set by init
@@ -823,6 +866,17 @@ main(int argc, char **argv) {
         }
     }
 
+    struct selinux_opt seopts[] = {
+      { SELABEL_OPT_PATH, "/file_contexts" }
+    };
+
+    sehandle = selabel_open(SELABEL_CTX_FILE, seopts, 1);
+
+    if (!sehandle) {
+        fprintf(stderr, "Warning: No file_contexts\n");
+        // ui_print("Warning:  No file_contexts\n");
+    }
+
     LOGI("device_recovery_start()\n");
     device_recovery_start();
 
@@ -890,6 +944,8 @@ main(int argc, char **argv) {
             LOGI("Skipping execution of extendedcommand, file not found...\n");
         }
     }
+
+    setup_adbd();
 
     if (status != INSTALL_SUCCESS && !is_user_initiated_recovery) {
         ui_set_show_text(1);

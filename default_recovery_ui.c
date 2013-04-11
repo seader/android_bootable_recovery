@@ -20,19 +20,20 @@
 #include "common.h"
 #include "extendedcommands.h"
 
-char* MENU_HEADERS[] = { "V2.0",
+char* MENU_HEADERS[] = { "V1.0",
 						 "POWER = enter, VOL_UP = up, VOL_DOWN = down",
 						 "",
 						 NULL };
 
 char* MENU_ITEMS[] = { "reboot system now",
                        "install zip from sdcard",
+                       "install zip from sideload",
                        "wipe data/factory reset",
                        "wipe cache partition",
                        "backup and restore",
                        "mounts and storage",
                        "advanced",
-                       "power off",
+					   "POWER OFF",
                        NULL };
 
 void device_ui_init(UIParameters* ui_parameters) {

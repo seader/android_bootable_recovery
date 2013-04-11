@@ -80,8 +80,17 @@ void write_string_to_file(const char* filename, const char* string) {
     sprintf(tmp, "mkdir -p $(dirname %s)", filename);
     __system(tmp);
     FILE *file = fopen(filename, "w");
-    fprintf(file, "%s", string);
-    fclose(file);
+    if( file != NULL) {
+        fprintf(file, "%s", string);
+        fclose(file);
+    }
+}
+
+void write_recovery_version() {
+    if ( is_data_media() ) {
+        write_string_to_file("/sdcard/0/clockworkmod/.recovery_version",EXPAND(RECOVERY_VERSION) "\n" EXPAND(TARGET_DEVICE));
+    }
+    write_string_to_file("/sdcard/clockworkmod/.recovery_version",EXPAND(RECOVERY_VERSION) "\n" EXPAND(TARGET_DEVICE));
 }
 
 void
@@ -153,6 +162,7 @@ void show_install_update_menu()
             }
             case ITEM_CHOOSE_ZIP:
                 show_choose_zip_menu("/sdcard/");
+                write_recovery_version();
                 break;
             case ITEM_CHOOSE_ZIP_INT:
                 if (other_sd != NULL)
@@ -225,7 +235,7 @@ char** gather_files(const char* directory, const char* fileExtensionOrDirectory,
                 char fullFileName[PATH_MAX];
                 strcpy(fullFileName, directory);
                 strcat(fullFileName, de->d_name);
-                stat(fullFileName, &info);
+                lstat(fullFileName, &info);
                 // make sure it is a directory
                 if (!(S_ISDIR(info.st_mode)))
                     continue;
@@ -492,7 +502,9 @@ int control_usb_storage_for_lun(Volume* vol, bool enable) {
 #ifdef BOARD_UMS_LUNFILE
         BOARD_UMS_LUNFILE,
 #endif
-        "/sys/devices/platform/fsl-tegra-udc/gadget/lun0/file",
+#ifdef TARGET_USE_CUSTOM_LUN_FILE_PATH
+        TARGET_USE_CUSTOM_LUN_FILE_PATH,
+#endif
         "/sys/devices/platform/usb_mass_storage/lun%d/file",
         "/sys/class/android_usb/android0/f_mass_storage/lun/file",
         "/sys/class/android_usb/android0/f_mass_storage/lun_ex/file",
@@ -569,7 +581,7 @@ void show_mount_usb_storage_menu()
         return;
 
     static char* headers[] = {  "USB Mass Storage device",
-                                "Leaving this menu unmount",
+                                "Leaving this menu unmounts",
                                 "your SD card from your PC.",
                                 "",
                                 NULL
@@ -607,13 +619,13 @@ int confirm_selection(const char* title, const char* confirm)
         return chosen_item == 1;
     }
     else {
-        char* items[] = { confirm, //" Yes -- wipe partition",   // [0]
+        char* items[] = { confirm, //" Yes -- wipe partition",   // [7]
                         "No",
                         NULL };
         int chosen_item = get_menu_selection(confirm_headers, items, 0, 0);
         return chosen_item == 0;
     }
-    }
+}
 
 #define MKE2FS_BIN      "/sbin/mke2fs"
 #define TUNE2FS_BIN     "/sbin/tune2fs"
@@ -964,7 +976,7 @@ void show_nandroid_advanced_restore_menu(const char* path)
                                 "",
                                 "Choose an image to restore",
                                 "first. The next menu will",
-                                "you more options.",
+                                "show you more options.",
                                 "",
                                 NULL
     };
@@ -1037,26 +1049,37 @@ static void run_dedupe_gc(const char* other_sd) {
     }
 }
 
-static void choose_backup_format() {
-    static char* headers[] = {  "Backup Format",
+static void choose_default_backup_format() {
+    static char* headers[] = {  "Default Backup Format",
                                 "",
                                 NULL
     };
 
-    char* list[] = { "dup (default)",
-        "tar",
+    char **list;
+    char* list_tar_default[] = { "tar (default)",
+        "dup",
         NULL
     };
+    char* list_dup_default[] = { "tar",
+        "dup (default)",
+        NULL
+    };
+
+    if (nandroid_get_default_backup_format() == NANDROID_BACKUP_FORMAT_DUP) {
+        list = list_dup_default;
+    } else {
+        list = list_tar_default;
+    }
 
     int chosen_item = get_menu_selection(headers, list, 0, 0);
     switch (chosen_item) {
         case 0:
-            write_string_to_file(NANDROID_BACKUP_FORMAT_FILE, "dup");
-            ui_print("Backup format set to dedupe.\n");
+            write_string_to_file(NANDROID_BACKUP_FORMAT_FILE, "tar");
+            ui_print("Default backup format set to tar.\n");
             break;
         case 1:
-            write_string_to_file(NANDROID_BACKUP_FORMAT_FILE, "tar");
-            ui_print("Backup format set to tar.\n");
+            write_string_to_file(NANDROID_BACKUP_FORMAT_FILE, "dup");
+            ui_print("Default backup format set to dedupe.\n");
             break;
     }
 }
@@ -1073,7 +1096,7 @@ void show_nandroid_menu()
                             "delete",
                             "advanced restore",
                             "free unused backup data",
-                            "choose backup format",
+                            "choose default backup format",
                             NULL,
                             NULL,
                             NULL,
@@ -1124,22 +1147,26 @@ void show_nandroid_menu()
                         strftime(backup_path, sizeof(backup_path), "/sdcard/clockworkmod/backup/%F.%H.%M.%S", tmp);
                     }
                     nandroid_backup(backup_path);
+                    write_recovery_version();
                 }
                 break;
             case 1:
                 show_nandroid_restore_menu("/sdcard");
+                write_recovery_version();
                 break;
             case 2:
                 show_nandroid_delete_menu("/sdcard");
+                write_recovery_version();
                 break;
             case 3:
                 show_nandroid_advanced_restore_menu("/sdcard");
+                write_recovery_version();
                 break;
             case 4:
                 run_dedupe_gc(other_sd);
                 break;
             case 5:
-                choose_backup_format();
+                choose_default_backup_format();
                 break;
             case 6:
                 {
@@ -1253,7 +1280,7 @@ int can_partition(const char* volume) {
 
     int vol_len = strlen(vol->device);
     // do not allow partitioning of a device that isn't mmcblkX or mmcblkXp1
-    if (vol->device[vol_len - 2] == 'p' && vol->device[vol_len - 2] != '1') {
+    if (vol->device[vol_len - 2] == 'p' && vol->device[vol_len - 1] != '1') {
         LOGI("Can't partition unsafe device: %s\n", vol->device);
         return 0;
     }
@@ -1266,6 +1293,15 @@ int can_partition(const char* volume) {
     return 1;
 }
 
+static int
+erase_volume(const char *volume) {
+    ui_set_background(BACKGROUND_ICON_INSTALLING);
+    ui_show_indeterminate_progress();
+    ui_print("Formatting %s...\n", volume);
+
+    return format_volume(volume);
+}
+
 void show_advanced_menu()
 {
     static char* headers[] = {  "Advanced Menu",
@@ -1274,27 +1310,14 @@ void show_advanced_menu()
     };
 
     static char* list[] = { "reboot bootloader",
-                            "reboot recovery",
-                            "wipe'em all (except SD)",
-                            "wipe dalvik and cache",
+							"reboot recovery",
+							"wipe'em all (except SDCARD)",
+                            "wipe dalvik & cache",
                             "report error",
                             "show log",
                             "fix permissions",
-                            "partition sdcard",
-                            "partition external sdcard",
-                            "partition internal sdcard",
                             NULL
     };
-
-    if (!can_partition("/sdcard")) {
-        list[7] = NULL;
-    }
-    if (!can_partition("/external_sd")) {
-        list[8] = NULL;
-    }
-    if (!can_partition("/emmc")) {
-        list[9] = NULL;
-    }
 
     for (;;)
     {
@@ -1310,43 +1333,32 @@ void show_advanced_menu()
                 android_reboot(ANDROID_RB_RESTART2, 0, "recovery");
                 break;
             case 2:
-                if (0 != ensure_path_mounted("/system"))
-                    break;
-                if (0 != ensure_path_mounted("/data"))
-                    break;
-                if (0 != ensure_path_mounted("/sdcard/.android_secure"))
-                    break;
-                ensure_path_mounted("/sd-ext");
-                ensure_path_mounted("/cache");
-                if (confirm_selection( "Confirm wipe?", "Yes - wipe everything ex. SD")) {
-                    ui_print("Clearing Data partition...\n");
-                    __system("rm -rf /data/*");
-                    ui_print("Clearing Cache partition...\n");
-                    __system("rm -rf /cache/*");
-                    ui_print("Clearing SD-EXT partition...\n");
-                    __system("rm -rf /sd-ext/*");
-                    ui_print("Clearing android_secure...\n");
-                    __system("rm -rf /sdcard/.android_secure/*");
-                    ui_print("Clearing System partition...\n");
-                    __system("rm -rf /system/*");
-                    ui_print("userdata/system/SD-EXT/cache/android_secure wiped.\n");                }
-                ensure_path_unmounted("/data");
-                ensure_path_unmounted("/system");
-                ensure_path_unmounted("/sdcard/.android_secure");
-                break;
+                if (confirm_selection( "Confirm wipe?", "Yes - Wipe everything except SDCARD")) {
+			    ui_print("\n-- Wiping everything except SDCARD...\n");
+			    device_wipe_data();
+			    erase_volume("/data");
+			    erase_volume("/system");
+			    erase_volume("/cache");
+			    if (has_datadata()) {
+		    	    erase_volume("/datadata");
+			    }
+			    erase_volume("/sd-ext");
+			    erase_volume("/sdcard/.android_secure");
+			    ui_print("Full wipe complete.\n");
+				}
+				break;
 			case 3:
                 if (0 != ensure_path_mounted("/data"))
                     break;
                 ensure_path_mounted("/sd-ext");
                 ensure_path_mounted("/cache");
                 if (confirm_selection( "Confirm wipe?", "Yes - Wipe Dalvik and Cache")) {
-                    __system("rm -rf /data/dalvik-cache");
-                    __system("rm -rf /cache/*");
-                    __system("rm -rf /sd-ext/dalvik-cache");
+                    __system("rm -r /data/dalvik-cache");
+                    __system("rm -r /cache/*");
+                    __system("rm -r /sd-ext/dalvik-cache");
                     ui_print("Dalvik and Cache wiped.\n");
                 }
                 ensure_path_unmounted("/data");
-                ensure_path_unmounted("/sd-ext");
                 break;
             case 4:
                 handle_failure(1);
@@ -1360,15 +1372,6 @@ void show_advanced_menu()
                 ui_print("Fixing permissions...\n");
                 __system("fix_permissions");
                 ui_print("Done!\n");
-                break;
-            case 7:
-                partition_sdcard("/sdcard");
-                break;
-            case 8:
-                partition_sdcard("/external_sd");
-                break;
-            case 9:
-                partition_sdcard("/emmc");
                 break;
         }
     }
@@ -1413,6 +1416,7 @@ void create_fstab()
     write_fstab_root("/system", file);
     write_fstab_root("/sdcard", file);
     write_fstab_root("/sd-ext", file);
+    write_fstab_root("/external_sd", file);
     fclose(file);
     LOGI("Completed outputting fstab.\n");
 }
